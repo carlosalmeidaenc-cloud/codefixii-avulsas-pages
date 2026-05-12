@@ -9,6 +9,9 @@
   const FONT_SCALE_MIN = 0.9;
   const FONT_SCALE_MAX = 1.34;
   const FONT_SCALE_STEP = 0.08;
+  const META_QUESTOES_DIA_DEFAULT = 20;
+  const META_QUESTOES_DIA_MIN = 1;
+  const META_QUESTOES_DIA_MAX = 500;
   const PASSWORD_HASH = '2fbfb4180b5622e9fed8f79fac088f31ecc0f3a578c9ac3c5b68942259a52560';
   const PASSWORD_SALT = 'avulsas-android-sync-v1:';
   const app = document.getElementById('app');
@@ -111,6 +114,24 @@
     const dt = new Date(`${text}T12:00:00`);
     if (Number.isNaN(dt.getTime())) return null;
     return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+
+  function diaLocalIso(value) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    const dt = new Date(text);
+    if (!Number.isNaN(dt.getTime())) {
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    }
+    const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : '';
+  }
+
+  function normalizarMetaQuestoesDia(value, fallback = META_QUESTOES_DIA_DEFAULT) {
+    const n = Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(META_QUESTOES_DIA_MIN, Math.min(META_QUESTOES_DIA_MAX, n));
   }
 
   function parseIsoTime(value) {
@@ -268,6 +289,12 @@
     const rows = stores().config || [];
     const found = Array.isArray(rows) ? rows.find((row) => row && row.key === key) : null;
     return found ? found.value : fallback;
+  }
+
+  function carregarMetaQuestoesDia() {
+    const configured = getConfigValue('metaQuestoesDia', null);
+    if (configured !== null && configured !== undefined) return normalizarMetaQuestoesDia(configured);
+    return normalizarMetaQuestoesDia(getConfigValue('novasPorDia', META_QUESTOES_DIA_DEFAULT));
   }
 
   function criarReviewStateAPartirDoLog(questaoId, log) {
@@ -470,17 +497,36 @@
     return out;
   }
 
+  function contarNovasIntroduzidasHoje(hojeIso) {
+    const questionIds = new Set((stores().questoes || []).map((q) => normalizarId(q && q.id)).filter(Boolean));
+    let count = 0;
+    for (const log of stores().reviewLogs || []) {
+      if (!questionIds.has(normalizarId(log && log.questaoId))) continue;
+      if (diaLocalIso(log && log.revisadoEm) !== hojeIso) continue;
+      if (Number(log && log.repsDepois || 0) === 1) count += 1;
+    }
+    return count;
+  }
+
   function nextQuestion() {
     const questions = stores().questoes || [];
     const today = todayIso();
     const candidates = questions.map((q) => ({ q, rs: getReviewState(q.id) }));
-    const due = candidates
-      .filter((item) => item.rs.state !== 'mastered' && item.rs.state !== 'new' && item.rs.dueDate <= today && reviewDisponivelAgora(item.rs))
+    const scheduled = candidates.filter((item) => item.rs.state !== 'mastered' && item.rs.state !== 'new');
+    const overdue = scheduled
+      .filter((item) => item.rs.dueDate < today)
       .sort((a, b) => String(a.rs.dueDate || '').localeCompare(String(b.rs.dueDate || '')));
-    if (due.length) return due[0];
+    if (overdue.length) return overdue[0];
+
+    const dueToday = scheduled
+      .filter((item) => item.rs.dueDate === today && reviewDisponivelAgora(item.rs))
+      .sort((a, b) => Number(b.rs.difficulty || 0) - Number(a.rs.difficulty || 0));
+    if (dueToday.length) return dueToday[0];
+
+    if (contarNovasIntroduzidasHoje(today) >= carregarMetaQuestoesDia()) return null;
     const fresh = candidates.find((item) => item.rs.state === 'new');
     if (fresh) return fresh;
-    return candidates.find((item) => item.rs.state !== 'mastered') || null;
+    return null;
   }
 
   function renderHome() {
