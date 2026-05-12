@@ -21,6 +21,7 @@
     manifest: null,
     data: null,
     pending: { reviewLogs: [], reviewStates: {} },
+    sentPackages: [],
     current: null,
     answered: null,
     message: ''
@@ -279,6 +280,7 @@
     await kvSet('manifest', state.manifest);
     await kvSet('data', state.data);
     await kvSet('pending', state.pending);
+    await kvSet('sentPackages', state.sentPackages);
   }
 
   function stores() {
@@ -497,6 +499,17 @@
     return out;
   }
 
+  function studyAvailability() {
+    const stats = calculateStats();
+    const dueCount = stats.devidas + stats.atrasadas;
+    return {
+      stats,
+      dueCount,
+      canStudy: dueCount > 0,
+      reason: dueCount > 0 ? '' : 'Nenhuma questao para hoje.'
+    };
+  }
+
   function contarNovasIntroduzidasHoje(hojeIso) {
     const questionIds = new Set((stores().questoes || []).map((q) => normalizarId(q && q.id)).filter(Boolean));
     let count = 0;
@@ -523,15 +536,14 @@
       .sort((a, b) => Number(b.rs.difficulty || 0) - Number(a.rs.difficulty || 0));
     if (dueToday.length) return dueToday[0];
 
-    if (contarNovasIntroduzidasHoje(today) >= carregarMetaQuestoesDia()) return null;
-    const fresh = candidates.find((item) => item.rs.state === 'new');
-    if (fresh) return fresh;
     return null;
   }
 
   function renderHome() {
-    const stats = calculateStats();
+    const availability = studyAvailability();
+    const stats = availability.stats;
     const pendingCount = state.pending.reviewLogs.length;
+    const sentCount = Array.isArray(state.sentPackages) ? state.sentPackages.length : 0;
     const tokenSaved = !!localStorage.getItem(TOKEN_KEY);
     app.innerHTML = `
       <section class="panel">
@@ -549,8 +561,10 @@
           <div class="stat"><strong>${stats.dominadas}</strong><span>dominadas</span></div>
           <div class="stat"><strong>${pendingCount}</strong><span>pendentes</span></div>
         </div>
+        ${!availability.canStudy ? `<p class="message muted">${escapeHtml(availability.reason)}</p>` : ''}
+        ${sentCount ? `<p class="message muted">${sentCount} pacote(s) enviado(s), aguardando sincronizacao no PC.</p>` : ''}
         <div class="actions">
-          <button class="primary" id="btn-study">Estudar</button>
+          <button class="primary" id="btn-study"${availability.canStudy ? '' : ' disabled'}>Estudar</button>
           <button id="btn-sync">Sincronizar</button>
         </div>
       </section>
@@ -566,12 +580,24 @@
     `;
     bindFontControls();
     document.getElementById('btn-study').onclick = async () => {
+      if (!studyAvailability().canStudy) {
+        state.message = 'Nenhuma questao para hoje.';
+        state.messageType = 'muted';
+        renderHome();
+        return;
+      }
       try {
         if (!state.pending.reviewLogs.length) {
           await refreshSnapshotAfterSync();
         }
         state.current = nextQuestion();
         state.answered = null;
+        if (!state.current) {
+          state.message = 'Nenhuma questao para hoje.';
+          state.messageType = 'muted';
+          renderHome();
+          return;
+        }
         renderQuestion();
       } catch (error) {
         state.message = error && error.message ? error.message : String(error);
@@ -767,9 +793,13 @@
       });
       const json = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(json.message || `GitHub HTTP ${response.status}`);
+      state.sentPackages = [
+        ...(Array.isArray(state.sentPackages) ? state.sentPackages : []),
+        { packageId, createdAt: payload.createdAt, reviewLogs: state.pending.reviewLogs.length }
+      ].slice(-12);
       state.pending = { reviewLogs: [], reviewStates: {} };
       await persistState();
-      state.message = 'Revisoes enviadas. Sincronize no PC para consolidar.';
+      state.message = 'Revisoes enviadas. Agora sincronize no PC para consolidar.';
       state.messageType = 'ok';
       renderHome();
     } catch (error) {
@@ -780,12 +810,16 @@
   }
 
   async function refreshSnapshotAfterSync() {
+    const previousSnapshotId = state.manifest && state.manifest.snapshotId || '';
     const remote = await loadRemoteSnapshot();
     if (state.pending.reviewLogs.length > 0 && remote.manifest.snapshotId !== state.manifest.snapshotId) {
       throw new Error('Ha revisoes pendentes. Sincronize antes de trocar o snapshot.');
     }
     state.manifest = remote.manifest;
     state.data = remote.data;
+    if (previousSnapshotId && remote.manifest.snapshotId !== previousSnapshotId) {
+      state.sentPackages = [];
+    }
     await persistState();
   }
 
@@ -793,6 +827,8 @@
     try {
       const savedPending = await kvGet('pending', { reviewLogs: [], reviewStates: {} });
       state.pending = savedPending || { reviewLogs: [], reviewStates: {} };
+      const savedSentPackages = await kvGet('sentPackages', []);
+      state.sentPackages = Array.isArray(savedSentPackages) ? savedSentPackages : [];
       const remote = await loadRemoteSnapshot();
       const savedManifest = await kvGet('manifest', null);
       const savedData = await kvGet('data', null);
