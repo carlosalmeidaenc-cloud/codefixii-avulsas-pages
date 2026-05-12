@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "kind": "avulsas-gitpages-snapshot",
+  "encryption": "aes-gcm",
+  "manifestPath": "manifest.enc",
+  "dataPath": "data/avulsas.enc"
+}
