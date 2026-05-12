@@ -5,6 +5,10 @@
   const DB_VERSION = 1;
   const TOKEN_KEY = 'avulsasGitpagesGithubToken';
   const DEVICE_KEY = 'avulsasGitpagesDeviceId';
+  const FONT_SCALE_KEY = 'avulsasGitpagesFontScale';
+  const FONT_SCALE_MIN = 0.9;
+  const FONT_SCALE_MAX = 1.34;
+  const FONT_SCALE_STEP = 0.08;
   const PASSWORD_HASH = '2fbfb4180b5622e9fed8f79fac088f31ecc0f3a578c9ac3c5b68942259a52560';
   const PASSWORD_SALT = 'avulsas-android-sync-v1:';
   const app = document.getElementById('app');
@@ -19,6 +23,8 @@
     message: ''
   };
 
+  applyFontScale(getFontScale());
+
   function escapeHtml(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;')
@@ -26,6 +32,54 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function clampNumber(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function getFontScale() {
+    const raw = Number(localStorage.getItem(FONT_SCALE_KEY));
+    if (!Number.isFinite(raw)) return 1;
+    return clampNumber(raw, FONT_SCALE_MIN, FONT_SCALE_MAX);
+  }
+
+  function applyFontScale(value) {
+    const scale = clampNumber(Number(value) || 1, FONT_SCALE_MIN, FONT_SCALE_MAX);
+    document.documentElement.style.setProperty('--font-scale', scale.toFixed(2));
+    localStorage.setItem(FONT_SCALE_KEY, scale.toFixed(2));
+    return scale;
+  }
+
+  function changeFontScale(delta) {
+    const scale = applyFontScale(getFontScale() + delta);
+    updateFontControlState(scale);
+  }
+
+  function fontControlsMarkup() {
+    const scale = getFontScale();
+    return `
+      <div class="font-control" aria-label="Tamanho da fonte">
+        <button type="button" id="btn-font-decrease" aria-label="Diminuir fonte" title="Diminuir fonte"${scale <= FONT_SCALE_MIN ? ' disabled' : ''}>-</button>
+        <span aria-hidden="true">A</span>
+        <button type="button" id="btn-font-increase" aria-label="Aumentar fonte" title="Aumentar fonte"${scale >= FONT_SCALE_MAX ? ' disabled' : ''}>+</button>
+      </div>
+    `;
+  }
+
+  function updateFontControlState(scale = getFontScale()) {
+    const decrease = document.getElementById('btn-font-decrease');
+    const increase = document.getElementById('btn-font-increase');
+    if (decrease) decrease.disabled = scale <= FONT_SCALE_MIN;
+    if (increase) increase.disabled = scale >= FONT_SCALE_MAX;
+  }
+
+  function bindFontControls() {
+    const decrease = document.getElementById('btn-font-decrease');
+    const increase = document.getElementById('btn-font-increase');
+    if (decrease) decrease.onclick = () => changeFontScale(-FONT_SCALE_STEP);
+    if (increase) increase.onclick = () => changeFontScale(FONT_SCALE_STEP);
+    updateFontControlState();
   }
 
   function uid() {
@@ -263,9 +317,14 @@
     const tokenSaved = !!localStorage.getItem(TOKEN_KEY);
     app.innerHTML = `
       <section class="panel">
-        <h1>Avulsas Android</h1>
-        <p class="muted">Snapshot ${escapeHtml(state.manifest.snapshotId)}.</p>
-        ${state.message ? `<p class="${state.messageType || 'muted'}">${escapeHtml(state.message)}</p>` : ''}
+        <div class="topbar">
+          <div class="topbar-title">
+            <h1>Avulsas Android</h1>
+            <p class="muted">Snapshot ${escapeHtml(state.manifest.snapshotId)}.</p>
+          </div>
+          ${fontControlsMarkup()}
+        </div>
+        ${state.message ? `<p class="message ${state.messageType || 'muted'}">${escapeHtml(state.message)}</p>` : ''}
         <div class="stats">
           <div class="stat"><strong>${stats.total}</strong><span>questoes</span></div>
           <div class="stat"><strong>${stats.devidas + stats.atrasadas}</strong><span>para hoje</span></div>
@@ -281,12 +340,13 @@
         <h2>GitHub</h2>
         <p class="muted">${tokenSaved ? 'Token salvo neste aparelho.' : 'Cole o token fine-grained uma vez neste aparelho.'}</p>
         <input id="github-token" type="password" autocomplete="off" placeholder="GitHub token">
-        <div class="actions" style="margin-top:8px">
+        <div class="actions token-actions">
           <button id="btn-save-token">Salvar token</button>
           <button id="btn-clear-token" class="danger">Apagar token</button>
         </div>
       </section>
     `;
+    bindFontControls();
     document.getElementById('btn-study').onclick = () => {
       state.current = nextQuestion();
       state.answered = null;
@@ -328,8 +388,11 @@
     app.innerHTML = `
       <section class="panel">
         <div class="topbar">
-          <button id="btn-home">Inicio</button>
-          <span class="pill">${escapeHtml(current.rs.state || 'new')}</span>
+          <div class="topbar-left">
+            <button id="btn-home">Inicio</button>
+            <span class="pill">${escapeHtml(current.rs.state || 'new')}</span>
+          </div>
+          ${fontControlsMarkup()}
         </div>
         <p class="muted">${escapeHtml(q.categoria || 'prova')} ${q.numeroOriginal ? `Q${escapeHtml(q.numeroOriginal)}` : ''}</p>
         <div class="question">${escapeHtml(q.enunciado || '')}</div>
@@ -339,6 +402,7 @@
       </section>
       ${answered ? renderAnswered(q, answered) : ''}
     `;
+    bindFontControls();
     document.getElementById('btn-home').onclick = renderHome;
     Array.from(document.querySelectorAll('[data-answer]')).forEach((btn) => {
       btn.onclick = () => {
@@ -365,11 +429,11 @@
           ${q.fundamentacao ? `<p>${escapeHtml(q.fundamentacao)}</p>` : ''}
         </div>
         <h2>Rating FSRS</h2>
-        <div class="actions">
-          <button data-rating="1">Errei</button>
-          <button data-rating="2">Dificil</button>
-          <button data-rating="3" class="primary">Bom</button>
-          <button data-rating="4">Facil</button>
+        <div class="actions rating-actions">
+          <button data-rating="1" class="rating-hard">Errei</button>
+          <button data-rating="2" class="rating-hard">Dificil</button>
+          <button data-rating="3" class="rating-good">Bom</button>
+          <button data-rating="4" class="rating-easy">Facil</button>
         </div>
       </section>
     `;
