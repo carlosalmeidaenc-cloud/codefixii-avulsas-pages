@@ -105,6 +105,43 @@
     return Math.round((Date.UTC(b[0], b[1] - 1, b[2]) - Date.UTC(a[0], a[1] - 1, a[2])) / 86400000);
   }
 
+  function parseIsoTime(value) {
+    const text = String(value || '').trim();
+    if (!text) return null;
+    const time = Date.parse(text);
+    return Number.isNaN(time) ? null : time;
+  }
+
+  function reviewDisponivelAgora(rs, agoraIso = new Date().toISOString()) {
+    if (!rs || !rs.nextDueAt) return true;
+    const dueTime = parseIsoTime(rs.nextDueAt);
+    if (dueTime === null) return true;
+    const nowTime = parseIsoTime(agoraIso);
+    return nowTime === null || dueTime <= nowTime;
+  }
+
+  function normalizarId(value) {
+    return String(value == null ? '' : value).trim();
+  }
+
+  function reviewStateQuestaoId(row) {
+    return normalizarId(row && (row.questaoId || row.id || row.key));
+  }
+
+  function reviewStateTimestamp(row) {
+    const value = row && (row.lastReviewedAt || row.atualizadoEm || row.updatedAt || '');
+    const time = Date.parse(value);
+    return Number.isNaN(time) ? 0 : time;
+  }
+
+  function deveSubstituirReviewState(incoming, current) {
+    if (!current) return true;
+    const a = reviewStateTimestamp(incoming);
+    const b = reviewStateTimestamp(current);
+    if (a !== b) return a > b;
+    return Number(incoming && incoming.reps || 0) >= Number(current && current.reps || 0);
+  }
+
   function base64UrlToBytes(value) {
     const text = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
     const padded = text + '='.repeat((4 - text.length % 4) % 4);
@@ -198,10 +235,11 @@
     const publicManifest = await fetch('manifest.json', { cache: 'no-store' }).then((r) => r.json());
     const privateManifest = await fetch(publicManifest.manifestPath, { cache: 'no-store' }).then((r) => r.json()).then((env) => decryptJson(env, key));
     const data = await fetch(privateManifest.dataPath, { cache: 'no-store' }).then((r) => r.json()).then((env) => decryptJson(env, key));
-    return { manifest: privateManifest, data };
+    return { manifest: privateManifest, data: normalizarSnapshotData(data) };
   }
 
   async function persistState() {
+    if (state.data) state.data = normalizarSnapshotData(state.data);
     await kvSet('manifest', state.manifest);
     await kvSet('data', state.data);
     await kvSet('pending', state.pending);
@@ -211,17 +249,90 @@
     return state.data && state.data.stores ? state.data.stores : {};
   }
 
+  function criarReviewStateAPartirDoLog(questaoId, log) {
+    const base = novoReviewState(questaoId);
+    if (!log) return base;
+    const repsDepois = Number(log.repsDepois || 0);
+    const rating = Number(log.rating || 0);
+    const state = String(log.state || (rating === 1 ? 'learning' : 'review'));
+    return {
+      ...base,
+      stability: Number(log.stabilityDepois || base.stability),
+      difficulty: Number(log.difficultyDepois || base.difficulty),
+      dueDate: String(log.novoIntervalo || base.dueDate),
+      lastReviewedAt: String(log.revisadoEm || base.lastReviewedAt || ''),
+      reps: Math.max(1, repsDepois || 1),
+      state: ['new', 'learning', 'review', 'mastered'].includes(state) ? state : 'review',
+      clamped: !!log.clamped
+    };
+  }
+
+  function indexarLogsPorQuestao(logs) {
+    const out = new Map();
+    for (const log of Array.isArray(logs) ? logs : []) {
+      const questaoId = normalizarId(log && log.questaoId);
+      if (!questaoId) continue;
+      const atual = out.get(questaoId);
+      const atualTime = atual ? Date.parse(atual.revisadoEm || '') || 0 : 0;
+      const logTime = Date.parse(log.revisadoEm || '') || 0;
+      if (!atual || logTime >= atualTime) out.set(questaoId, log);
+    }
+    return out;
+  }
+
+  function indexarReviewStates(rows) {
+    const out = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const questaoId = reviewStateQuestaoId(row);
+      if (!questaoId) continue;
+      const normalized = row.questaoId === questaoId ? row : { ...row, questaoId };
+      if (deveSubstituirReviewState(normalized, out.get(questaoId))) {
+        out.set(questaoId, normalized);
+      }
+    }
+    return out;
+  }
+
+  function normalizarSnapshotData(data) {
+    const snapshot = data && typeof data === 'object' ? data : {};
+    const s = snapshot.stores && typeof snapshot.stores === 'object' ? snapshot.stores : {};
+    const questoes = Array.isArray(s.questoes) ? s.questoes : [];
+    const qIds = new Set(questoes.map((q) => normalizarId(q && q.id)).filter(Boolean));
+    const stateByQuestao = indexarReviewStates(s.reviewStates);
+    const logByQuestao = indexarLogsPorQuestao(s.reviewLogs);
+    const reviewStates = [];
+
+    for (const questao of questoes) {
+      const questaoId = normalizarId(questao && questao.id);
+      if (!questaoId) continue;
+      const existing = stateByQuestao.get(questaoId);
+      reviewStates.push(existing || criarReviewStateAPartirDoLog(questaoId, logByQuestao.get(questaoId)));
+    }
+
+    for (const [questaoId, row] of stateByQuestao.entries()) {
+      if (!qIds.has(questaoId)) continue;
+      if (!reviewStates.some((item) => reviewStateQuestaoId(item) === questaoId)) reviewStates.push(row);
+    }
+
+    snapshot.stores = { ...s, questoes, reviewStates };
+    return snapshot;
+  }
+
   function getReviewState(questaoId) {
-    const all = stores().reviewStates || [];
-    return all.find((row) => row.questaoId === questaoId) || novoReviewState(questaoId);
+    const id = normalizarId(questaoId);
+    if (!id) return novoReviewState('');
+    return indexarReviewStates(stores().reviewStates).get(id) || novoReviewState(id);
   }
 
   function putReviewState(row) {
+    const questaoId = reviewStateQuestaoId(row);
+    if (!questaoId) return;
+    const normalized = row.questaoId === questaoId ? row : { ...row, questaoId };
     const all = stores().reviewStates || (stores().reviewStates = []);
-    const idx = all.findIndex((item) => item.questaoId === row.questaoId);
-    if (idx >= 0) all[idx] = row;
-    else all.push(row);
-    state.pending.reviewStates[row.questaoId] = row;
+    const idx = all.findIndex((item) => reviewStateQuestaoId(item) === questaoId);
+    if (idx >= 0) all[idx] = normalized;
+    else all.push(normalized);
+    state.pending.reviewStates[questaoId] = normalized;
   }
 
   function putReviewLog(row) {
@@ -285,15 +396,18 @@
 
   function calculateStats() {
     const allQuestions = stores().questoes || [];
-    const allStates = stores().reviewStates || [];
+    const stateByQuestao = indexarReviewStates(stores().reviewStates);
     const today = todayIso();
     const out = { total: allQuestions.length, visitadas: 0, novas: 0, devidas: 0, atrasadas: 0, dominadas: 0 };
-    for (const rs of allStates) {
+    for (const q of allQuestions) {
+      const questaoId = normalizarId(q && q.id);
+      if (!questaoId) continue;
+      const rs = stateByQuestao.get(questaoId) || novoReviewState(questaoId);
       if ((rs.reps || 0) > 0) out.visitadas += 1;
       if (rs.state === 'mastered') out.dominadas += 1;
       else if (rs.state === 'new') out.novas += 1;
       else if (rs.dueDate < today) out.atrasadas += 1;
-      else if (rs.dueDate === today) out.devidas += 1;
+      else if (rs.dueDate === today && reviewDisponivelAgora(rs)) out.devidas += 1;
     }
     return out;
   }
@@ -303,7 +417,7 @@
     const today = todayIso();
     const candidates = questions.map((q) => ({ q, rs: getReviewState(q.id) }));
     const due = candidates
-      .filter((item) => item.rs.state !== 'mastered' && item.rs.state !== 'new' && item.rs.dueDate <= today)
+      .filter((item) => item.rs.state !== 'mastered' && item.rs.state !== 'new' && item.rs.dueDate <= today && reviewDisponivelAgora(item.rs))
       .sort((a, b) => String(a.rs.dueDate || '').localeCompare(String(b.rs.dueDate || '')));
     if (due.length) return due[0];
     const fresh = candidates.find((item) => item.rs.state === 'new');
@@ -347,10 +461,19 @@
       </section>
     `;
     bindFontControls();
-    document.getElementById('btn-study').onclick = () => {
-      state.current = nextQuestion();
-      state.answered = null;
-      renderQuestion();
+    document.getElementById('btn-study').onclick = async () => {
+      try {
+        if (!state.pending.reviewLogs.length) {
+          await refreshSnapshotAfterSync();
+        }
+        state.current = nextQuestion();
+        state.answered = null;
+        renderQuestion();
+      } catch (error) {
+        state.message = error && error.message ? error.message : String(error);
+        state.messageType = 'danger';
+        renderHome();
+      }
     };
     document.getElementById('btn-sync').onclick = syncNow;
     document.getElementById('btn-save-token').onclick = () => {
@@ -569,7 +692,7 @@
       const hasPending = state.pending.reviewLogs.length > 0;
       if (hasPending && savedManifest && savedData && savedManifest.snapshotId !== remote.manifest.snapshotId) {
         state.manifest = savedManifest;
-        state.data = savedData;
+        state.data = normalizarSnapshotData(savedData);
         state.message = 'Ha revisoes pendentes. Sincronize antes de trocar o snapshot.';
         state.messageType = 'danger';
       } else {
