@@ -3,7 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Avulsas Android</title>
+  <meta name="theme-color" content="#202020">
+  <title>Lexora Avulsas</title>
+  <link rel="manifest" href="../../manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="../../assets/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="../../assets/icons/icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
@@ -16,6 +20,19 @@
       <p>Carregando snapshot...</p>
     </section>
   </main>
+  <script>
+    (function () {
+      var hasSnapshotKey = /(?:^|&)k=/.test(location.hash.replace(/^#/, ''));
+      if (hasSnapshotKey) {
+        localStorage.setItem('lexoraAvulsasLastSnapshotUrl', location.href);
+      }
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('../../service-worker.js', { scope: '../../' });
+        });
+      }
+    })();
+  </script>
   <script type="module" src="../../assets/app.js?v=20260513-fsrs-core-identity"></script>
 </body>
 </html>
