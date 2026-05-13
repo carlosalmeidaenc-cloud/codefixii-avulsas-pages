@@ -13,6 +13,30 @@ const FACTOR = Math.pow(TARGET_RETENTION, -1 / 0.5) - 1;
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
+function normalizeKeyValue(value) {
+  if (value == null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? Number(value.toPrecision(12)) : null;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim();
+  return text || null;
+}
+
+export function reviewStateKey(rs) {
+  const source = rs && typeof rs === 'object' ? rs : {};
+  return JSON.stringify({
+    questaoId: normalizeKeyValue(source.questaoId),
+    stability: normalizeKeyValue(Number(source.stability || 0)),
+    difficulty: normalizeKeyValue(Number(source.difficulty || 0)),
+    dueDate: normalizeKeyValue(source.dueDate),
+    nextDueAt: normalizeKeyValue(source.nextDueAt),
+    lastReviewedAt: normalizeKeyValue(source.lastReviewedAt),
+    reps: normalizeKeyValue(Number(source.reps || 0)),
+    lapses: normalizeKeyValue(Number(source.lapses || 0)),
+    state: normalizeKeyValue(source.state || 'new'),
+    clamped: !!source.clamped
+  });
+}
+
 function addDaysIso(isoDate, days) {
   const [y, m, d] = isoDate.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
