@@ -498,10 +498,14 @@
     const hoje = todayIso();
     const novasRestantesHoje = Math.max(0, carregarMetaQuestoesDia() - contarNovasIntroduzidasHoje(hoje));
     const podeIntroduzirNova = stats.novas > 0 && novasRestantesHoje > 0;
+    const novasParaEstudar = Math.min(stats.novas, novasRestantesHoje);
+    const totalParaEstudar = dueCount + novasParaEstudar;
     return {
       stats,
       dueCount,
       novasRestantesHoje,
+      novasParaEstudar,
+      totalParaEstudar,
       canStudy: dueCount > 0 || podeIntroduzirNova,
       reason: dueCount > 0 || podeIntroduzirNova ? '' : 'Nenhuma questao para hoje.'
     };
@@ -560,9 +564,11 @@
         ${state.message ? `<p class="message ${state.messageType || 'muted'}">${escapeHtml(state.message)}</p>` : ''}
         <div class="stats">
           <div class="stat"><strong>${stats.total}</strong><span>questoes</span></div>
-          <div class="stat"><strong>${stats.devidas + stats.atrasadas}</strong><span>para hoje</span></div>
+          <div class="stat stat-primary"><strong>${availability.totalParaEstudar}</strong><span>para estudar</span></div>
+          <div class="stat"><strong>${stats.devidas + stats.atrasadas}</strong><span>revisoes</span></div>
+          <div class="stat"><strong>${availability.novasParaEstudar}</strong><span>novas hoje</span></div>
           <div class="stat"><strong>${stats.dominadas}</strong><span>dominadas</span></div>
-          <div class="stat"><strong>${pendingCount}</strong><span>pendentes</span></div>
+          <div class="stat"><strong>${pendingCount}</strong><span>a sincronizar</span></div>
         </div>
         ${!availability.canStudy ? `<p class="message muted">${escapeHtml(availability.reason)}</p>` : ''}
         ${sentCount ? `<p class="message muted">${sentCount} pacote(s) enviado(s), aguardando sincronizacao no PC.</p>` : ''}
@@ -739,7 +745,7 @@
     try {
       if (state.pending.reviewLogs.length === 0) {
         await refreshSnapshotAfterSync();
-        state.message = 'Sem revisoes pendentes. Snapshot conferido.';
+        state.message = 'Snapshot conferido. Nao havia respostas locais para enviar.';
         state.messageType = 'ok';
         renderHome();
         return;
@@ -789,7 +795,7 @@
       ].slice(-12);
       state.pending = { reviewLogs: [], reviewStates: {} };
       await persistState();
-      state.message = 'Revisoes enviadas. Agora sincronize no PC para consolidar.';
+      state.message = 'Respostas enviadas. Agora sincronize no PC para consolidar.';
       state.messageType = 'ok';
       renderHome();
     } catch (error) {
