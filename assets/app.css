@@ -158,6 +158,11 @@ p {
   line-height: 1.2;
 }
 
+.stat-primary {
+  background: var(--color-warning-soft);
+  border-color: #dbc69b;
+}
+
 .stat span {
   color: var(--color-muted);
   font-size: 0.86rem;
