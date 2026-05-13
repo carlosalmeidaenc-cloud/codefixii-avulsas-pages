@@ -12,8 +12,6 @@
   const META_QUESTOES_DIA_DEFAULT = 20;
   const META_QUESTOES_DIA_MIN = 1;
   const META_QUESTOES_DIA_MAX = 500;
-  const PASSWORD_HASH = '2fbfb4180b5622e9fed8f79fac088f31ecc0f3a578c9ac3c5b68942259a52560';
-  const PASSWORD_SALT = 'avulsas-android-sync-v1:';
   const app = document.getElementById('app');
 
   let dbPromise = null;
@@ -154,6 +152,11 @@
     return String(value == null ? '' : value).trim();
   }
 
+  function logContaComoResposta(log) {
+    const origem = String(log && log.origem || '').trim();
+    return origem !== 'validacao';
+  }
+
   function reviewStateQuestaoId(row) {
     return normalizarId(row && (row.questaoId || row.id || row.key));
   }
@@ -193,11 +196,6 @@
     const arr = new Uint8Array(bytes);
     for (let i = 0; i < arr.length; i += 1) binary += String.fromCharCode(arr[i]);
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-  }
-
-  async function sha256Hex(text) {
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(text || '')));
-    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
   }
 
   async function decryptJson(envelope, keyB64) {
@@ -317,9 +315,31 @@
     };
   }
 
+  function normalizarReviewStateComoNovo(row) {
+    const questaoId = reviewStateQuestaoId(row);
+    return { ...row, ...novoReviewState(questaoId) };
+  }
+
+  function agruparLogsPorQuestao(logs) {
+    const out = new Map();
+    for (const log of Array.isArray(logs) ? logs : []) {
+      const questaoId = normalizarId(log && log.questaoId);
+      if (!questaoId) continue;
+      if (!out.has(questaoId)) out.set(questaoId, []);
+      out.get(questaoId).push(log);
+    }
+    return out;
+  }
+
+  function questaoTemSomenteLogsLegados(questaoId, logsPorQuestao) {
+    const logs = logsPorQuestao.get(questaoId) || [];
+    return logs.length > 0 && logs.every((log) => !logContaComoResposta(log));
+  }
+
   function indexarLogsPorQuestao(logs) {
     const out = new Map();
     for (const log of Array.isArray(logs) ? logs : []) {
+      if (!logContaComoResposta(log)) continue;
       const questaoId = normalizarId(log && log.questaoId);
       if (!questaoId) continue;
       const atual = out.get(questaoId);
@@ -349,6 +369,7 @@
     const questoes = Array.isArray(s.questoes) ? s.questoes : [];
     const qIds = new Set(questoes.map((q) => normalizarId(q && q.id)).filter(Boolean));
     const stateByQuestao = indexarReviewStates(s.reviewStates);
+    const logsPorQuestao = agruparLogsPorQuestao(s.reviewLogs);
     const logByQuestao = indexarLogsPorQuestao(s.reviewLogs);
     const reviewStates = [];
 
@@ -356,7 +377,11 @@
       const questaoId = normalizarId(questao && questao.id);
       if (!questaoId) continue;
       const existing = stateByQuestao.get(questaoId);
-      reviewStates.push(existing || criarReviewStateAPartirDoLog(questaoId, logByQuestao.get(questaoId)));
+      if (existing && questaoTemSomenteLogsLegados(questaoId, logsPorQuestao)) {
+        reviewStates.push(normalizarReviewStateComoNovo(existing));
+      } else {
+        reviewStates.push(existing || criarReviewStateAPartirDoLog(questaoId, logByQuestao.get(questaoId)));
+      }
     }
 
     for (const [questaoId, row] of stateByQuestao.entries()) {
@@ -502,11 +527,15 @@
   function studyAvailability() {
     const stats = calculateStats();
     const dueCount = stats.devidas + stats.atrasadas;
+    const hoje = todayIso();
+    const novasRestantesHoje = Math.max(0, carregarMetaQuestoesDia() - contarNovasIntroduzidasHoje(hoje));
+    const podeIntroduzirNova = stats.novas > 0 && novasRestantesHoje > 0;
     return {
       stats,
       dueCount,
-      canStudy: dueCount > 0,
-      reason: dueCount > 0 ? '' : 'Nenhuma questao para hoje.'
+      novasRestantesHoje,
+      canStudy: dueCount > 0 || podeIntroduzirNova,
+      reason: dueCount > 0 || podeIntroduzirNova ? '' : 'Nenhuma questao para hoje.'
     };
   }
 
@@ -514,6 +543,7 @@
     const questionIds = new Set((stores().questoes || []).map((q) => normalizarId(q && q.id)).filter(Boolean));
     let count = 0;
     for (const log of stores().reviewLogs || []) {
+      if (!logContaComoResposta(log)) continue;
       if (!questionIds.has(normalizarId(log && log.questaoId))) continue;
       if (diaLocalIso(log && log.revisadoEm) !== hojeIso) continue;
       if (Number(log && log.repsDepois || 0) === 1) count += 1;
@@ -535,6 +565,12 @@
       .filter((item) => item.rs.dueDate === today && reviewDisponivelAgora(item.rs))
       .sort((a, b) => Number(b.rs.difficulty || 0) - Number(a.rs.difficulty || 0));
     if (dueToday.length) return dueToday[0];
+
+    const novasIntroduzidasHoje = contarNovasIntroduzidasHoje(today);
+    if (novasIntroduzidasHoje < carregarMetaQuestoesDia()) {
+      const nova = candidates.find((item) => item.rs.state === 'new');
+      if (nova) return nova;
+    }
 
     return null;
   }
@@ -732,23 +768,8 @@
     return id;
   }
 
-  async function validatePassword() {
-    const password = prompt('Senha para sincronizar:');
-    if (password === null) return false;
-    const hash = await sha256Hex(PASSWORD_SALT + password);
-    return hash === PASSWORD_HASH;
-  }
-
   async function syncNow() {
     try {
-      if (!(await validatePassword())) {
-        state.message = 'Senha incorreta.';
-        state.messageType = 'danger';
-        renderHome();
-        return;
-      }
-      const token = localStorage.getItem(TOKEN_KEY);
-      if (!token) throw new Error('Token GitHub nao configurado neste aparelho.');
       if (state.pending.reviewLogs.length === 0) {
         await refreshSnapshotAfterSync();
         state.message = 'Sem revisoes pendentes. Snapshot conferido.';
@@ -756,6 +777,8 @@
         renderHome();
         return;
       }
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token) throw new Error('Token GitHub nao configurado neste aparelho.');
       const packageId = `${Date.now()}-${uid()}`;
       const payload = {
         kind: 'avulsas-mobile-sync-package',
