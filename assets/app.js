@@ -11,9 +11,6 @@ import { FSRS_CORE_VERSION, reviewStateKey, updateState } from './fsrs-core.js';
   const FONT_SCALE_MIN = 0.9;
   const FONT_SCALE_MAX = 1.34;
   const FONT_SCALE_STEP = 0.08;
-  const META_QUESTOES_DIA_DEFAULT = 20;
-  const META_QUESTOES_DIA_MIN = 1;
-  const META_QUESTOES_DIA_MAX = 500;
   const app = document.getElementById('app');
 
   let dbPromise = null;
@@ -115,24 +112,6 @@ import { FSRS_CORE_VERSION, reviewStateKey, updateState } from './fsrs-core.js';
     const dt = new Date(`${text}T12:00:00`);
     if (Number.isNaN(dt.getTime())) return null;
     return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-  }
-
-  function diaLocalIso(value) {
-    const text = String(value || '').trim();
-    if (!text) return '';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-    const dt = new Date(text);
-    if (!Number.isNaN(dt.getTime())) {
-      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-    }
-    const match = text.match(/^(\d{4}-\d{2}-\d{2})/);
-    return match ? match[1] : '';
-  }
-
-  function normalizarMetaQuestoesDia(value, fallback = META_QUESTOES_DIA_DEFAULT) {
-    const n = Number.parseInt(String(value ?? ''), 10);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.max(META_QUESTOES_DIA_MIN, Math.min(META_QUESTOES_DIA_MAX, n));
   }
 
   function parseIsoTime(value) {
@@ -327,12 +306,6 @@ import { FSRS_CORE_VERSION, reviewStateKey, updateState } from './fsrs-core.js';
     return found ? found.value : fallback;
   }
 
-  function carregarMetaQuestoesDia() {
-    const configured = getConfigValue('metaQuestoesDia', null);
-    if (configured !== null && configured !== undefined) return normalizarMetaQuestoesDia(configured);
-    return normalizarMetaQuestoesDia(getConfigValue('novasPorDia', META_QUESTOES_DIA_DEFAULT));
-  }
-
   function criarReviewStateAPartirDoLog(questaoId, log) {
     const base = novoReviewState(questaoId);
     if (!log) return base;
@@ -461,32 +434,14 @@ import { FSRS_CORE_VERSION, reviewStateKey, updateState } from './fsrs-core.js';
   function studyAvailability() {
     const stats = calculateStats();
     const dueCount = stats.devidas + stats.atrasadas;
-    const hoje = todayIso();
-    const novasRestantesHoje = Math.max(0, carregarMetaQuestoesDia() - contarNovasIntroduzidasHoje(hoje));
-    const podeIntroduzirNova = stats.novas > 0 && novasRestantesHoje > 0;
-    const novasParaEstudar = Math.min(stats.novas, novasRestantesHoje);
-    const totalParaEstudar = dueCount + novasParaEstudar;
+    const totalParaEstudar = dueCount + stats.novas;
     return {
       stats,
       dueCount,
-      novasRestantesHoje,
-      novasParaEstudar,
       totalParaEstudar,
-      canStudy: dueCount > 0 || podeIntroduzirNova,
-      reason: dueCount > 0 || podeIntroduzirNova ? '' : 'Nenhuma questao liberada para estudar.'
+      canStudy: totalParaEstudar > 0,
+      reason: totalParaEstudar > 0 ? '' : 'Nenhuma questao para estudar.'
     };
-  }
-
-  function contarNovasIntroduzidasHoje(hojeIso) {
-    const questionIds = new Set((stores().questoes || []).map((q) => normalizarId(q && q.id)).filter(Boolean));
-    let count = 0;
-    for (const log of stores().reviewLogs || []) {
-      if (String(log && log.origem || '').trim() === 'validacao') continue;
-      if (!questionIds.has(normalizarId(log && log.questaoId))) continue;
-      if (diaLocalIso(log && log.revisadoEm) !== hojeIso) continue;
-      if (Number(log && log.repsDepois || 0) === 1) count += 1;
-    }
-    return count;
   }
 
   function nextQuestion() {
@@ -504,11 +459,8 @@ import { FSRS_CORE_VERSION, reviewStateKey, updateState } from './fsrs-core.js';
       .sort((a, b) => Number(b.rs.difficulty || 0) - Number(a.rs.difficulty || 0));
     if (dueToday.length) return dueToday[0];
 
-    const novasIntroduzidasHoje = contarNovasIntroduzidasHoje(today);
-    if (novasIntroduzidasHoje < carregarMetaQuestoesDia()) {
-      const nova = candidates.find((item) => item.rs.state === 'new');
-      if (nova) return nova;
-    }
+    const nova = candidates.find((item) => item.rs.state === 'new');
+    if (nova) return nova;
 
     return null;
   }
@@ -534,7 +486,6 @@ import { FSRS_CORE_VERSION, reviewStateKey, updateState } from './fsrs-core.js';
           <div class="stat stat-primary"><strong>${availability.totalParaEstudar}</strong><span>para estudar</span></div>
           <div class="stat"><strong>${stats.devidas + stats.atrasadas}</strong><span>revisoes hoje</span></div>
           <div class="stat"><strong>${stats.novas}</strong><span>novas ineditas</span></div>
-          <div class="stat"><strong>${availability.novasParaEstudar}</strong><span>novas liberadas</span></div>
           <div class="stat"><strong>${pendingCount}</strong><span>a sincronizar</span></div>
         </div>
         ${!availability.canStudy ? `<p class="message muted">${escapeHtml(availability.reason)}</p>` : ''}
@@ -557,7 +508,7 @@ import { FSRS_CORE_VERSION, reviewStateKey, updateState } from './fsrs-core.js';
     bindFontControls();
     document.getElementById('btn-study').onclick = async () => {
       if (!studyAvailability().canStudy) {
-        state.message = 'Nenhuma questao liberada para estudar.';
+        state.message = 'Nenhuma questao para estudar.';
         state.messageType = 'muted';
         renderHome();
         return;
