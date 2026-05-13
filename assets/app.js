@@ -152,11 +152,6 @@
     return String(value == null ? '' : value).trim();
   }
 
-  function logContaComoResposta(log) {
-    const origem = String(log && log.origem || '').trim();
-    return origem !== 'validacao';
-  }
-
   function reviewStateQuestaoId(row) {
     return normalizarId(row && (row.questaoId || row.id || row.key));
   }
@@ -315,31 +310,9 @@
     };
   }
 
-  function normalizarReviewStateComoNovo(row) {
-    const questaoId = reviewStateQuestaoId(row);
-    return { ...row, ...novoReviewState(questaoId) };
-  }
-
-  function agruparLogsPorQuestao(logs) {
-    const out = new Map();
-    for (const log of Array.isArray(logs) ? logs : []) {
-      const questaoId = normalizarId(log && log.questaoId);
-      if (!questaoId) continue;
-      if (!out.has(questaoId)) out.set(questaoId, []);
-      out.get(questaoId).push(log);
-    }
-    return out;
-  }
-
-  function questaoTemSomenteLogsLegados(questaoId, logsPorQuestao) {
-    const logs = logsPorQuestao.get(questaoId) || [];
-    return logs.length > 0 && logs.every((log) => !logContaComoResposta(log));
-  }
-
   function indexarLogsPorQuestao(logs) {
     const out = new Map();
     for (const log of Array.isArray(logs) ? logs : []) {
-      if (!logContaComoResposta(log)) continue;
       const questaoId = normalizarId(log && log.questaoId);
       if (!questaoId) continue;
       const atual = out.get(questaoId);
@@ -369,7 +342,6 @@
     const questoes = Array.isArray(s.questoes) ? s.questoes : [];
     const qIds = new Set(questoes.map((q) => normalizarId(q && q.id)).filter(Boolean));
     const stateByQuestao = indexarReviewStates(s.reviewStates);
-    const logsPorQuestao = agruparLogsPorQuestao(s.reviewLogs);
     const logByQuestao = indexarLogsPorQuestao(s.reviewLogs);
     const reviewStates = [];
 
@@ -377,11 +349,7 @@
       const questaoId = normalizarId(questao && questao.id);
       if (!questaoId) continue;
       const existing = stateByQuestao.get(questaoId);
-      if (existing && questaoTemSomenteLogsLegados(questaoId, logsPorQuestao)) {
-        reviewStates.push(normalizarReviewStateComoNovo(existing));
-      } else {
-        reviewStates.push(existing || criarReviewStateAPartirDoLog(questaoId, logByQuestao.get(questaoId)));
-      }
+      reviewStates.push(existing || criarReviewStateAPartirDoLog(questaoId, logByQuestao.get(questaoId)));
     }
 
     for (const [questaoId, row] of stateByQuestao.entries()) {
@@ -543,7 +511,6 @@
     const questionIds = new Set((stores().questoes || []).map((q) => normalizarId(q && q.id)).filter(Boolean));
     let count = 0;
     for (const log of stores().reviewLogs || []) {
-      if (!logContaComoResposta(log)) continue;
       if (!questionIds.has(normalizarId(log && log.questaoId))) continue;
       if (diaLocalIso(log && log.revisadoEm) !== hojeIso) continue;
       if (Number(log && log.repsDepois || 0) === 1) count += 1;
