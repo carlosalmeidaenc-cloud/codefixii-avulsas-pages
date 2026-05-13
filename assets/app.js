@@ -1,4 +1,4 @@
-import { updateState } from './fsrs-core.js';
+import { FSRS_CORE_VERSION, reviewStateKey, updateState } from './fsrs-core.js';
 
 (function () {
   'use strict';
@@ -709,8 +709,15 @@ import { updateState } from './fsrs-core.js';
     const log = {
       id: uid(),
       questaoId: q.id,
-      revisadoEm: new Date().toISOString(),
+      revisadoEm: agora,
+      hojeIso: hoje,
+      dataObjetivoIso,
       rating,
+      fsrsCoreVersion: FSRS_CORE_VERSION,
+      baseStateKey: reviewStateKey(before),
+      afterStateKey: reviewStateKey(after),
+      stateAntes: { ...before },
+      stateDepois: { ...after },
       intervaloAnterior: before.dueDate,
       novoIntervalo: after.dueDate,
       intervaloDias: result.intervaloFinal,
