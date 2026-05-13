@@ -292,6 +292,40 @@
     return state.data && state.data.stores ? state.data.stores : {};
   }
 
+  function storeRows(name) {
+    const rows = stores()[name];
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  function findStoreRow(name, id) {
+    const key = normalizarId(id);
+    if (!key) return null;
+    return storeRows(name).find((row) => normalizarId(row && row.id) === key) || null;
+  }
+
+  function questionTags(q) {
+    return Array.isArray(q && q.tags)
+      ? q.tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+      : [];
+  }
+
+  function questionContextMarkup(q) {
+    const disciplina = findStoreRow('disciplinas', q && q.disciplinaId);
+    const materia = findStoreRow('materias', q && q.materiaId);
+    const parts = [
+      disciplina && disciplina.nome ? disciplina.nome : '',
+      materia && materia.nome ? materia.nome : ''
+    ].filter(Boolean);
+    const title = parts.length ? parts.join(' / ') : (q && q.categoria ? q.categoria : 'Questao');
+    const tags = questionTags(q);
+    return `
+      <div class="question-context">
+        <p class="question-context-title">${escapeHtml(title)}</p>
+        ${tags.length ? `<div class="question-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+      </div>
+    `;
+  }
+
   function getConfigValue(key, fallback = null) {
     const rows = stores().config || [];
     const found = Array.isArray(rows) ? rows.find((row) => row && row.key === key) : null;
@@ -519,7 +553,7 @@
       novasParaEstudar,
       totalParaEstudar,
       canStudy: dueCount > 0 || podeIntroduzirNova,
-      reason: dueCount > 0 || podeIntroduzirNova ? '' : 'Nenhuma questao para hoje.'
+      reason: dueCount > 0 || podeIntroduzirNova ? '' : 'Nenhuma questao liberada para estudar.'
     };
   }
 
@@ -578,9 +612,9 @@
         <div class="stats">
           <div class="stat"><strong>${stats.total}</strong><span>questoes</span></div>
           <div class="stat stat-primary"><strong>${availability.totalParaEstudar}</strong><span>para estudar</span></div>
-          <div class="stat"><strong>${stats.devidas + stats.atrasadas}</strong><span>revisoes</span></div>
-          <div class="stat"><strong>${availability.novasParaEstudar}</strong><span>novas hoje</span></div>
-          <div class="stat"><strong>${stats.dominadas}</strong><span>dominadas</span></div>
+          <div class="stat"><strong>${stats.devidas + stats.atrasadas}</strong><span>revisoes hoje</span></div>
+          <div class="stat"><strong>${stats.novas}</strong><span>novas ineditas</span></div>
+          <div class="stat"><strong>${availability.novasParaEstudar}</strong><span>novas liberadas</span></div>
           <div class="stat"><strong>${pendingCount}</strong><span>a sincronizar</span></div>
         </div>
         ${!availability.canStudy ? `<p class="message muted">${escapeHtml(availability.reason)}</p>` : ''}
@@ -603,7 +637,7 @@
     bindFontControls();
     document.getElementById('btn-study').onclick = async () => {
       if (!studyAvailability().canStudy) {
-        state.message = 'Nenhuma questao para hoje.';
+        state.message = 'Nenhuma questao liberada para estudar.';
         state.messageType = 'muted';
         renderHome();
         return;
@@ -651,11 +685,12 @@
     }
     const q = current.q;
     const answered = state.answered;
+    const answerDisabled = answered ? ' disabled' : '';
     const alternatives = q.tipo === 'ME' && Array.isArray(q.alternativas)
-      ? q.alternativas.map((alt) => `<button class="alternative" data-answer="${escapeHtml(alt.letra)}"><strong>${escapeHtml(alt.letra)})</strong> ${escapeHtml(alt.texto)}</button>`).join('')
+      ? q.alternativas.map((alt) => `<button class="alternative" data-answer="${escapeHtml(alt.letra)}"${answerDisabled}><strong>${escapeHtml(alt.letra)})</strong> ${escapeHtml(alt.texto)}</button>`).join('')
       : `
-        <button class="alternative" data-answer="C">Certo</button>
-        <button class="alternative" data-answer="E">Errado</button>
+        <button class="alternative" data-answer="C"${answerDisabled}>Certo</button>
+        <button class="alternative" data-answer="E"${answerDisabled}>Errado</button>
       `;
     app.innerHTML = `
       <section class="panel">
@@ -666,7 +701,7 @@
           </div>
           ${fontControlsMarkup()}
         </div>
-        <p class="muted">${escapeHtml(q.categoria || 'prova')} ${q.numeroOriginal ? `Q${escapeHtml(q.numeroOriginal)}` : ''}</p>
+        ${questionContextMarkup(q)}
         <div class="question">${escapeHtml(q.enunciado || '')}</div>
       </section>
       <section class="panel">
@@ -677,9 +712,19 @@
     bindFontControls();
     document.getElementById('btn-home').onclick = renderHome;
     Array.from(document.querySelectorAll('[data-answer]')).forEach((btn) => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         const choice = btn.getAttribute('data-answer');
-        state.answered = { choice, correct: String(choice).toUpperCase() === String(q.respostaCorreta || '').toUpperCase() };
+        const correct = String(choice).toUpperCase() === String(q.respostaCorreta || '').toUpperCase();
+        state.answered = { choice, correct };
+        if (!correct) {
+          try {
+            await applyRating(1);
+            state.answered.ratingApplied = 1;
+          } catch (error) {
+            state.message = error && error.message ? error.message : String(error);
+            state.messageType = 'danger';
+          }
+        }
         renderQuestion();
       };
     });
@@ -691,22 +736,38 @@
         renderQuestion();
       };
     });
+    const nextBtn = document.getElementById('btn-next-answer');
+    if (nextBtn) {
+      nextBtn.onclick = () => {
+        state.current = nextQuestion();
+        state.answered = null;
+        renderQuestion();
+      };
+    }
   }
 
   function renderAnswered(q, answered) {
+    const ratingActions = answered.correct
+      ? `
+        <h2>Como foi?</h2>
+        <div class="actions rating-actions rating-actions-correct">
+          <button data-rating="2" class="rating-hard">Dificil</button>
+          <button data-rating="3" class="rating-good">Bom</button>
+          <button data-rating="4" class="rating-easy">Facil</button>
+        </div>
+      `
+      : `
+        <div class="actions answer-actions">
+          <button id="btn-next-answer" class="primary">Proxima</button>
+        </div>
+      `;
     return `
       <section class="panel">
         <div class="answer-box">
           <p><strong>${answered.correct ? 'Acertou' : 'Errou'}.</strong> Gabarito: ${escapeHtml(q.respostaCorreta || '-')}</p>
           ${q.fundamentacao ? `<p>${escapeHtml(q.fundamentacao)}</p>` : ''}
         </div>
-        <h2>Rating FSRS</h2>
-        <div class="actions rating-actions">
-          <button data-rating="1" class="rating-hard">Errei</button>
-          <button data-rating="2" class="rating-hard">Dificil</button>
-          <button data-rating="3" class="rating-good">Bom</button>
-          <button data-rating="4" class="rating-easy">Facil</button>
-        </div>
+        ${ratingActions}
       </section>
     `;
   }
@@ -739,6 +800,9 @@
     };
     putReviewState(after);
     putReviewLog(log);
+    if (state.current && state.current.q && normalizarId(state.current.q.id) === normalizarId(q.id)) {
+      state.current.rs = after;
+    }
     await persistState();
   }
 
