@@ -270,10 +270,22 @@
 
   async function persistState() {
     if (state.data) state.data = normalizarSnapshotData(state.data);
+    state.pending = normalizarPending(state.pending);
     await kvSet('manifest', state.manifest);
     await kvSet('data', state.data);
     await kvSet('pending', state.pending);
     await kvSet('sentPackages', state.sentPackages);
+  }
+
+  function normalizarPending(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const reviewStates = source.reviewStates && typeof source.reviewStates === 'object' && !Array.isArray(source.reviewStates)
+      ? source.reviewStates
+      : {};
+    return {
+      reviewLogs: Array.isArray(source.reviewLogs) ? source.reviewLogs : [],
+      reviewStates
+    };
   }
 
   function stores() {
@@ -596,13 +608,10 @@
         return;
       }
       try {
-        if (!state.pending.reviewLogs.length) {
-          await refreshSnapshotAfterSync();
-        }
         state.current = nextQuestion();
         state.answered = null;
         if (!state.current) {
-          state.message = 'Nenhuma questao para hoje.';
+          state.message = 'Nenhuma questao para estudar neste snapshot.';
           state.messageType = 'muted';
           renderHome();
           return;
@@ -822,23 +831,44 @@
   async function boot() {
     try {
       const savedPending = await kvGet('pending', { reviewLogs: [], reviewStates: {} });
-      state.pending = savedPending || { reviewLogs: [], reviewStates: {} };
+      state.pending = normalizarPending(savedPending);
       const savedSentPackages = await kvGet('sentPackages', []);
       state.sentPackages = Array.isArray(savedSentPackages) ? savedSentPackages : [];
-      const remote = await loadRemoteSnapshot();
       const savedManifest = await kvGet('manifest', null);
       const savedData = await kvGet('data', null);
       const hasPending = state.pending.reviewLogs.length > 0;
-      if (hasPending && savedManifest && savedData && savedManifest.snapshotId !== remote.manifest.snapshotId) {
-        state.manifest = savedManifest;
-        state.data = normalizarSnapshotData(savedData);
-        state.message = 'Ha revisoes pendentes. Sincronize antes de trocar o snapshot.';
-        state.messageType = 'danger';
-      } else {
+      const hasSavedSnapshot = !!(savedManifest && savedData && savedManifest.snapshotId);
+
+      if (!hasSavedSnapshot) {
+        const remote = await loadRemoteSnapshot();
         state.manifest = remote.manifest;
         state.data = remote.data;
         await persistState();
+        renderHome();
+        return;
       }
+
+      state.manifest = savedManifest;
+      state.data = normalizarSnapshotData(savedData);
+
+      try {
+        const remote = await loadRemoteSnapshot();
+        if (remote.manifest.snapshotId !== savedManifest.snapshotId) {
+          state.message = hasPending
+            ? 'Snapshot novo disponivel. Envie as respostas locais antes de atualizar.'
+            : 'Snapshot novo disponivel. Toque em Sincronizar para atualizar.';
+          state.messageType = hasPending ? 'danger' : 'muted';
+        }
+      } catch (error) {
+        state.message = 'Nao foi possivel conferir snapshot remoto. Usando copia local.';
+        state.messageType = 'muted';
+      }
+
+      if (hasPending) {
+        state.manifest = savedManifest;
+        state.data = normalizarSnapshotData(savedData);
+      }
+      await persistState();
       renderHome();
     } catch (error) {
       app.innerHTML = `<section class="panel"><h1>Falha ao abrir</h1><p class="danger">${escapeHtml(error.message || error)}</p></section>`;
