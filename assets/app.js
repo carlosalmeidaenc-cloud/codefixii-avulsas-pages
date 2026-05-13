@@ -744,6 +744,12 @@
         renderQuestion();
       };
     }
+    if (answered) {
+      requestAnimationFrame(() => {
+        const answerPanel = document.getElementById('answer-panel');
+        if (answerPanel) answerPanel.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
+    }
   }
 
   function renderAnswered(q, answered) {
@@ -762,7 +768,7 @@
         </div>
       `;
     return `
-      <section class="panel">
+      <section class="panel" id="answer-panel">
         <div class="answer-box">
           <p><strong>${answered.correct ? 'Acertou' : 'Errou'}.</strong> Gabarito: ${escapeHtml(q.respostaCorreta || '-')}</p>
           ${q.fundamentacao ? `<p>${escapeHtml(q.fundamentacao)}</p>` : ''}
