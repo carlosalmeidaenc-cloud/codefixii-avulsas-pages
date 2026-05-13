@@ -1,15 +1,15 @@
 {
   "schema": 1,
   "kind": "avulsas-latest-snapshot",
-  "snapshotId": "avulsas-20260513T12534-sXATIA_t",
-  "createdAt": "2026-05-13T12:53:47.790Z",
+  "snapshotId": "avulsas-20260513T13082-fngxaaqj",
+  "createdAt": "2026-05-13T13:08:23.275Z",
   "url": "https://carlosalmeidaenc-cloud.github.io/codefixii-avulsas-pages/avulsas/fb-8T3Lf3JBS9-Z9rvE3j8yoVqcxbx7U/#k=T6d6OG1HJocBSRrkO0Mt0PirEAR3mxWOE5DdqD4ZV2g",
   "stats": {
     "disciplinas": 8,
     "materias": 71,
     "questoes": 198,
     "reviewStates": 198,
-    "reviewLogs": 300,
+    "reviewLogs": 301,
     "deletionEvents": 1,
     "config": 2
   },
@@ -21,7 +21,7 @@
     "revisando": 177,
     "dominadas": 0,
     "atrasadas": 0,
-    "devidasHoje": 3,
-    "futuras": 174
+    "devidasHoje": 2,
+    "futuras": 175
   }
 }
