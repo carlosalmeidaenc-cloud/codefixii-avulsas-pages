@@ -527,6 +527,7 @@
     const questionIds = new Set((stores().questoes || []).map((q) => normalizarId(q && q.id)).filter(Boolean));
     let count = 0;
     for (const log of stores().reviewLogs || []) {
+      if (String(log && log.origem || '').trim() === 'validacao') continue;
       if (!questionIds.has(normalizarId(log && log.questaoId))) continue;
       if (diaLocalIso(log && log.revisadoEm) !== hojeIso) continue;
       if (Number(log && log.repsDepois || 0) === 1) count += 1;
