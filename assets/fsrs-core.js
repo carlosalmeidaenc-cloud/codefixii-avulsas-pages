@@ -1,7 +1,7 @@
 // FSRS-4.5 core for Avulsas.
 // This file is the single source of truth used by the PC app and GitPages Android.
 
-export const FSRS_CORE_VERSION = 'fsrs-4.5-avulsas-core-2026-05-13';
+export const FSRS_CORE_VERSION = 'fsrs-4.5-avulsas-core-2026-05-14-deadline-rebalance';
 
 const W = [
   0.4, 0.6, 2.4, 5.8, 4.93, 0.94, 0.86, 0.01,
@@ -45,6 +45,19 @@ function addDaysIso(isoDate, days) {
   const mm = String(dt.getMonth() + 1).padStart(2, '0');
   const dd = String(dt.getDate()).padStart(2, '0');
   return `${yy}-${mm}-${dd}`;
+}
+
+function normalizarIsoDate(value) {
+  const text = String(value || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const [y, m, d] = text.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  if (Number.isNaN(dt.getTime())) return null;
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const normalized = `${yy}-${mm}-${dd}`;
+  return normalized === text ? normalized : null;
 }
 
 function diffDaysIso(fromIso, toIso) {
@@ -95,6 +108,88 @@ function addMinutesIso(baseIso, minutes) {
   return dt.toISOString();
 }
 
+function deveMarcarMastered({ rating, dataObjetivoIso, diasAteObjetivo, intervaloAlvoCalculado }) {
+  if (rating < 2) return false;
+  if (!dataObjetivoIso) return false;
+  if (!Number.isFinite(Number(diasAteObjetivo))) return false;
+  const alvo = Number.isFinite(Number(intervaloAlvoCalculado)) ? Number(intervaloAlvoCalculado) : 0;
+  return alvo > Number(diasAteObjetivo);
+}
+
+function calcularAgendamentoPorDeadline(baseIso, stability, dataObjetivoIso = null) {
+  const alvo = intervaloAlvo(Number(stability) || 0);
+  let intervaloFinal = alvo;
+  let clamped = false;
+  let diasAteObjetivo = null;
+  const dataLimite = normalizarIsoDate(dataObjetivoIso);
+
+  if (dataLimite) {
+    diasAteObjetivo = diffDaysIso(baseIso, dataLimite);
+    if (diasAteObjetivo <= 0) {
+      intervaloFinal = 1;
+      clamped = true;
+    } else if (alvo > diasAteObjetivo) {
+      intervaloFinal = diasAteObjetivo;
+      clamped = true;
+    }
+  }
+
+  intervaloFinal = Math.max(1, Math.round(intervaloFinal));
+  return {
+    intervaloFinal,
+    intervaloAlvoCalculado: alvo,
+    clamped,
+    diasAteObjetivo,
+    dataObjetivoIso: dataLimite,
+    dueDate: addDaysIso(baseIso, intervaloFinal)
+  };
+}
+
+export function rebalanceStateForDeadline(rs, dataObjetivoIso = null, hojeIso = null) {
+  const original = rs && typeof rs === 'object' ? rs : {};
+  const out = { ...original };
+  const state = String(out.state || 'new');
+  const reps = Math.max(0, Number.parseInt(String(out.reps || 0), 10) || 0);
+
+  if (reps <= 0 || state === 'new' || state === 'learning') {
+    return { newState: out, changed: false, skipped: true, reason: 'state-not-schedulable' };
+  }
+
+  const stability = Number(out.stability || 0);
+  if (!Number.isFinite(stability) || stability <= 0) {
+    return { newState: out, changed: false, skipped: true, reason: 'missing-stability' };
+  }
+
+  const baseIso = normalizarIsoDate(out.lastReviewedAt)
+    || normalizarIsoDate(out.dueDate)
+    || normalizarIsoDate(hojeIso);
+  if (!baseIso) {
+    return { newState: out, changed: false, skipped: true, reason: 'missing-base-date' };
+  }
+
+  const agendamento = calcularAgendamentoPorDeadline(baseIso, stability, dataObjetivoIso);
+  out.dueDate = agendamento.dueDate;
+  out.nextDueAt = null;
+  out.clamped = agendamento.clamped;
+  out.state = deveMarcarMastered({
+    rating: 2,
+    dataObjetivoIso: agendamento.dataObjetivoIso,
+    diasAteObjetivo: agendamento.diasAteObjetivo,
+    intervaloAlvoCalculado: agendamento.intervaloAlvoCalculado
+  }) ? 'mastered' : 'review';
+
+  return {
+    newState: out,
+    changed: reviewStateKey(original) !== reviewStateKey(out),
+    skipped: false,
+    baseDateIso: baseIso,
+    intervaloFinal: agendamento.intervaloFinal,
+    intervaloAlvoCalculado: agendamento.intervaloAlvoCalculado,
+    dataObjetivoIso: agendamento.dataObjetivoIso,
+    clamped: agendamento.clamped
+  };
+}
+
 export function updateState(rs, rating, hojeIso, dataObjetivoIso = null, agoraIso = null) {
   if (![1, 2, 3, 4].includes(rating)) {
     throw new Error(`rating invalido: ${rating}`);
@@ -125,8 +220,9 @@ export function updateState(rs, rating, hojeIso, dataObjetivoIso = null, agoraIs
   let intervaloFinal;
   const alvo = intervaloAlvo(out.stability);
   let clamped = false;
+  let diasAteObjetivo = null;
   if (dataObjetivoIso) {
-    const diasAteObjetivo = diffDaysIso(hojeIso, dataObjetivoIso);
+    diasAteObjetivo = diffDaysIso(hojeIso, dataObjetivoIso);
     if (diasAteObjetivo <= 0) {
       intervaloFinal = 1;
       clamped = true;
@@ -152,11 +248,12 @@ export function updateState(rs, rating, hojeIso, dataObjetivoIso = null, agoraIs
   out.clamped = clamped;
   out.state = (rating === 1) ? 'learning' : 'review';
 
-  if (clamped) {
-    if (out.difficulty <= 4 && out.reps >= 3 && out.lapses === 0 && rating >= 3) {
-      out.state = 'mastered';
-    }
-  } else if (out.reps >= 4 && out.difficulty <= 3.5 && out.lapses === 0 && rating >= 3) {
+  if (deveMarcarMastered({
+    rating,
+    dataObjetivoIso,
+    diasAteObjetivo,
+    intervaloAlvoCalculado: alvo
+  })) {
     out.state = 'mastered';
   }
 
